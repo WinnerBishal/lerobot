@@ -3,17 +3,18 @@ from typing import Dict, List
 from pathlib import Path
 
 from ..config import RobotConfig
+from ...cameras.camera import CameraConfig
 
+@RobotConfig.register_subclass("kinova_follower")
 @dataclass
 class KinovaFollowerConfig(RobotConfig):
-
-    # standarad field required by LeRobot
-    type: str = "kinova_follower"
 
     # Custom Driver prameters for Kinova Gen3 API
     ip: str = "192.168.1.10"
     username: str = "admin"
     password: str = "admin"
+
+    cameras: Dict[str, CameraConfig] = field(default_factory=dict)
 
     # Features Definitions
     features: Dict[str, Dict] = field(
