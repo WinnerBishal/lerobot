@@ -57,25 +57,27 @@ class KinovaFollower(Robot):
         pass
 
     def get_observation(self) -> dict[str, Any]:
-        """
-        Must return a dictionary matching observation_features.
-        """
         if not self.is_connected:
             raise ConnectionError("Kinova is not connected.")
 
-        # Read from utility class
-        current_joints = self.arm.currentJointAngles # List[float]
-        current_gripper = self.arm.currentGripperPosition # float
-        
-        obs_dict = {}
-        feature_names = self.config.features["observation.state"]["names"]
-        
-        # Combine data
+        # 1. Get Robot State (Existing code)
+        current_joints = self.arm.currentJointAngles
+        current_gripper = self.arm.currentGripperPosition
         all_values = list(current_joints) + [current_gripper]
-
         
-        state_tensor = torch.tensor(all_values, dtype=torch.float32)
-        return {"observation.state": state_tensor}
+        # Create the observation dictionary with the state
+        observation = {
+            "observation.state": torch.tensor(all_values, dtype=torch.float32)
+        }
+
+        # 2. Capture Images
+        if self.cameras:
+            # This method comes from the parent Robot class.
+            # It triggers all cameras in self.cameras to read a frame.
+            images = self.capture_images() 
+            observation.update(images)
+
+        return observation
 
     def send_action(self, action: dict[str, Any]) -> dict[str, Any]:
         """
