@@ -15,3 +15,5 @@
 from .camera import Camera
 from .configs import CameraConfig, ColorMode, Cv2Rotation
 from .utils import make_cameras_from_configs
+
+from .network_camera.configuration_network_camera import NetworkCameraConfig # Imported here instead of lerobot_record.py
