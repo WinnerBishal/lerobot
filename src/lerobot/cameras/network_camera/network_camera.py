@@ -1,6 +1,6 @@
 import numpy as np
 import cv2
-from typing import Optional
+from typing import Optional, List, Dict, Any
 
 from lerobot.cameras.camera import Camera
 from lerobot.cameras.configs import ColorMode
@@ -19,6 +19,14 @@ class NetworkCamera(Camera):
     @property
     def is_connected(self) -> bool:
         return self._is_connected
+    
+    @staticmethod
+    def find_cameras() -> List[Dict[str, Any]]:
+        """
+        Network cameras cannot be automatically discovered. 
+        Returns an empty list to satisfy the Camera interface.
+        """
+        return []
 
     def connect(self, warmup: bool = True) -> None:
         if self.is_connected:
