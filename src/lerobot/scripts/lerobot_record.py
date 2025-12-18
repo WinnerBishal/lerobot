@@ -110,6 +110,7 @@ from lerobot.teleoperators import (  # noqa: F401
     make_teleoperator_from_config,
     so100_leader,
     so101_leader,
+    xbox,
 )
 from lerobot.teleoperators.keyboard.teleop_keyboard import KeyboardTeleop
 from lerobot.utils.constants import ACTION, OBS_STR
@@ -141,15 +142,15 @@ class DatasetRecordConfig:
     # Limit the frames per second.
     fps: int = 30
     # Number of seconds for data recording for each episode.
-    episode_time_s: int | float = 60
+    episode_time_s: int | float = 3000
     # Number of seconds for resetting the environment after each episode.
-    reset_time_s: int | float = 60
+    reset_time_s: int | float = 3000
     # Number of episodes to record.
     num_episodes: int = 50
     # Encode frames in the dataset into video
     video: bool = True
     # Upload dataset to Hugging Face hub.
-    push_to_hub: bool = True
+    push_to_hub: bool = False
     # Upload on private repository on the Hugging Face hub.
     private: bool = False
     # Add tags to your dataset on the hub.
@@ -381,6 +382,12 @@ def record(cfg: RecordConfig) -> LeRobotDataset:
     robot = make_robot_from_config(cfg.robot)
     teleop = make_teleoperator_from_config(cfg.teleop) if cfg.teleop is not None else None
 
+    # --- DEBUG BLOCK ---
+    print("\n" + "="*50)
+    print(f"!!! DEBUG: SCRIPT SEES ROBOT FEATURES: {list(robot.observation_features.keys())}")
+    print("="*50 + "\n")
+    # -----------------------------
+
     teleop_action_processor, robot_action_processor, robot_observation_processor = make_default_processors()
 
     dataset_features = combine_feature_dicts(
@@ -397,6 +404,27 @@ def record(cfg: RecordConfig) -> LeRobotDataset:
             use_videos=cfg.dataset.video,
         ),
     )
+
+    # ========================== DEBUG BLOCK START ==========================
+    print("\n" + "!"*40)
+    print("!!! DEBUG: PRE-DATASET CREATION CHECK")
+    print(f"1. Video Config Enabled: {cfg.dataset.video}")
+    
+    # Check if the robot still has cameras attached
+    cam_count = len(robot.cameras) if hasattr(robot, 'cameras') else 0
+    print(f"2. Robot Camera Count: {cam_count}")
+    if hasattr(robot, 'cameras'):
+        print(f"   Camera Keys: {list(robot.cameras.keys())}")
+    
+    # Check if features actually include images
+    img_feats = [k for k in dataset_features.keys() if "image" in k]
+    print(f"3. Dataset Features containing 'image': {img_feats}")
+    
+    # Calculate what threads we are about to request
+    requested_threads = cfg.dataset.num_image_writer_threads_per_camera * cam_count
+    print(f"4. Threads Requested: {requested_threads}")
+    print("!"*40 + "\n")
+    # ========================== DEBUG BLOCK END ============================
 
     if cfg.resume:
         dataset = LeRobotDataset(
