@@ -6,7 +6,7 @@ from typing import Optional
 from numpy.typing import NDArray
 
 class ZMQCapture:
-    # --- Standard Stream Profiles ---
+    # ... (Profiles remain the same) ...
     COLOR_PROFILE = {
         "port": 5556,
         "width": 1280,
@@ -24,7 +24,6 @@ class ZMQCapture:
         "dtype_str": "uint16",
         "fps": 30
     }
-    # --------------------------------
 
     def __init__(
         self, 
@@ -51,6 +50,8 @@ class ZMQCapture:
         self.running = False
         self.latest_frame: Optional[NDArray] = None
         self.frame_lock = threading.Lock()
+        
+        self.frame_counter = 0
 
     def connect(self):
         try:
@@ -75,9 +76,10 @@ class ZMQCapture:
     def _wait_for_first_frame(self):
         start_t = time.time()
         while time.time() - start_t < self.connect_timeout:
-            if self.read() is not None:
-                print(f"✅ Connected to {self.url}")
-                return
+            with self.frame_lock:
+                if self.latest_frame is not None:
+                    print(f"✅ Connected to {self.url}")
+                    return
             time.sleep(0.1)
         raise TimeoutError(f"Timed out waiting for data from {self.url}")
 
@@ -98,6 +100,8 @@ class ZMQCapture:
 
                 with self.frame_lock:
                     self.latest_frame = frame
+
+                    self.frame_counter += 1
 
             except zmq.ContextTerminated:
                 break
