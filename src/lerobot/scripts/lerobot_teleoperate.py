@@ -55,6 +55,7 @@ import logging
 import time
 from dataclasses import asdict, dataclass
 from pprint import pformat
+import torch
 
 import rerun as rr
 
@@ -77,6 +78,7 @@ from lerobot.robots import (  # noqa: F401
     make_robot_from_config,
     so100_follower,
     so101_follower,
+    kinova_follower,
 )
 from lerobot.teleoperators import (  # noqa: F401
     Teleoperator,
@@ -89,6 +91,7 @@ from lerobot.teleoperators import (  # noqa: F401
     make_teleoperator_from_config,
     so100_leader,
     so101_leader,
+    xbox,
 )
 from lerobot.utils.import_utils import register_third_party_plugins
 from lerobot.utils.robot_utils import precise_sleep
@@ -170,8 +173,17 @@ def teleop_loop(
             print("\n" + "-" * (display_len + 10))
             print(f"{'NAME':<{display_len}} | {'NORM':>7}")
             # Display the final robot action that was sent
+            # for motor, value in robot_action_to_send.items():
+            #     print(f"{motor:<{display_len}} | {value:>7.2f}")
             for motor, value in robot_action_to_send.items():
-                print(f"{motor:<{display_len}} | {value:>7.2f}")
+                # --- START FIX ---
+                if isinstance(value, torch.Tensor) and value.numel() > 1:
+                    # If it's a vector (like 'action'), just print the shape or first few values
+                    print(f"{motor:<{display_len}} | Vector{tuple(value.shape)}")
+                else:
+                    # Original scalar logic
+                    val_float = value.item() if isinstance(value, torch.Tensor) else value
+                    print(f"{motor:<{display_len}} | {val_float:>7.2f}")
             move_cursor_up(len(robot_action_to_send) + 3)
 
         dt_s = time.perf_counter() - loop_start
