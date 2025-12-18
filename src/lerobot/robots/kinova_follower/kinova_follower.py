@@ -2,9 +2,10 @@ import torch
 import numpy as np
 from functools import cached_property
 from typing import Any
+import copy
 
 from lerobot.robots.robot import Robot
-from lerobot.cameras.utils import make_cameras_from_configs  # <--- IMPORT THIS
+from lerobot.cameras.utils import make_cameras_from_configs
 from .config_kinova_follower import KinovaFollowerConfig
 from .kinova_utilities import ExecuteRobotAction
 
@@ -18,8 +19,15 @@ class KinovaFollower(Robot):
         
         self.arm = ExecuteRobotAction()
         
-        # 1. Initialize Cameras explicitly
+        # 1. Initialize Cameras
         self.cameras = make_cameras_from_configs(config.cameras)
+        
+        # 2. Sync Config Features
+        # Ensure config matches the Tuple format required for video recording.
+        # This allows LeRobot to detect these as 'video' features.
+        if "observation.images" not in self.config.features:
+             for name, camera in self.cameras.items():
+                self.config.features[f"observation.images.{name}"] = (camera.height, camera.width, 3)
         
         self._connected = False
 
@@ -33,20 +41,32 @@ class KinovaFollower(Robot):
 
     @cached_property
     def observation_features(self) -> dict:
-        features = {"observation.state": self.config.features["observation.state"]}
+        """
+        Defines the structure of the observation dictionary.
+        """
+        # 1. Flatten state features
+        state_names = self.config.features["observation.state"]["names"]
+        features = {name: float for name in state_names}
         
-        # Add camera features to the dictionary
+        # 2. Define images as TUPLES (H, W, C) for video recording
+        # This format signals to LeRobot that these are video streams.
         for name, camera in self.cameras.items():
-            features[f"observation.images.{name}"] = {
-                "dtype": "uint8",
-                "shape": (camera.height, camera.width, 3),
-                "names": ["height", "width", "channel"],
-            }
+            features[f"observation.images.{name}"] = (camera.height, camera.width, 3)
+            
         return features
 
     @cached_property
     def action_features(self) -> dict:
-        return {"action": self.config.features["action"]}
+        """
+        Defines the structure of the action dictionary.
+        We return a single vector shape to match the Xbox controller output.
+        """
+        return {
+            "action": {
+                "dtype": "float32",
+                "shape": (7,),
+            }
+        }
 
     def connect(self, calibrate: bool = True):
         if self.is_connected:
@@ -59,7 +79,6 @@ class KinovaFollower(Robot):
             password=self.config.password
         )
         
-        # 2. Connect all cameras
         for name, camera in self.cameras.items():
             print(f"Connecting to camera: {name}")
             camera.connect()
@@ -72,12 +91,34 @@ class KinovaFollower(Robot):
         print("Kinova System Connected.")
 
     def capture_images(self) -> dict[str, Any]:
-        """Reads frames from all connected cameras."""
+        """
+        Reads frames from all connected cameras.
+        """
         images = {}
         for name, camera in self.cameras.items():
-            # Use async_read for better performance in the loop
-            image = camera.async_read()
-            images[f"observation.images.{name}"] = image
+            img = camera.async_read()
+            
+            # Safe conversion to uint8 to prevent dark videos
+            # This handles cases where drivers might return float [0,1]
+            if img is not None:
+                if isinstance(img, torch.Tensor):
+                    img = img.cpu().numpy()
+                
+                if isinstance(img, np.ndarray):
+                    if np.issubdtype(img.dtype, np.floating):
+                        # Scale float [0, 1] to [0, 255] if needed
+                        if img.max() <= 1.0:
+                            img = (img * 255).astype(np.uint8)
+                        else:
+                            img = img.astype(np.uint8)
+                    elif img.dtype != np.uint8:
+                        img = img.astype(np.uint8)
+            
+            # FIX: Return ONLY the short key (e.g., 'wrist_image').
+            # The dataset recorder automatically maps 'wrist_image' -> 'observation.images.wrist_image'.
+            # Rerun will now see only this one active window per camera.
+            images[name] = img
+            
         return images
 
     def calibrate(self):
@@ -90,15 +131,16 @@ class KinovaFollower(Robot):
         if not self.is_connected:
             raise ConnectionError("Kinova is not connected.")
 
+        # 1. Get Robot State
         current_joints = self.arm.currentJointAngles
         current_gripper = self.arm.currentGripperPosition
         all_values = list(current_joints) + [current_gripper]
         
-        observation = {
-            "observation.state": torch.tensor(all_values, dtype=torch.float32)
-        }
+        # 2. Map values to flattened keys
+        state_names = self.config.features["observation.state"]["names"]
+        observation = {name: val for name, val in zip(state_names, all_values)}
 
-        # 3. Capture Images (Now self.cameras exists)
+        # 3. Add images
         if self.cameras:
             images = self.capture_images() 
             observation.update(images)
@@ -135,7 +177,6 @@ class KinovaFollower(Robot):
     def disconnect(self):
         print("Disconnecting Kinova System...")
         
-        # 4. Disconnect cameras
         for name, camera in self.cameras.items():
             try:
                 camera.disconnect()
