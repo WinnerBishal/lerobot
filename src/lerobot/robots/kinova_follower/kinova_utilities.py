@@ -90,24 +90,32 @@ class ExecuteRobotAction:
         # Cache for gripper to avoid spamming the bus during continuous control
         self.last_gripper_val = -1.0
     
-    def connect_to_robot(self):
+    def connect_to_robot(self, ip="192.168.1.10", username="admin", password="admin"):
         try:
-            connectionArgs = parseConnectionArguments()
+            # Create a simple object to mimic the argparse result
+            class ConnectionArgs:
+                def __init__(self, ip, u, p):
+                    self.ip = ip
+                    self.username = u
+                    self.password = p
+            
+            connectionArgs = ConnectionArgs(ip, username, password)
 
+            # Now use these explicit args instead of parsing sys.argv
             self.connection = DeviceConnection.createTcpConnection(connectionArgs)
             self.router = self.connection.__enter__()
             self.base = BaseClient(self.router)
             self.baseCyclic = BaseCyclicClient(self.router)
 
             self.isConnected = True
-            print("\n Connected to Robot Successfully \n")
+            print(f"\n Connected to Robot at {ip} Successfully \n")
             
-            # CRITICAL: Set Servoing Mode to SINGLE_LEVEL_SERVOING
-            # This is required for the robot to accept real-time Twist commands
+            # CRITICAL: Set Servoing Mode
             base_servo_mode = Base_pb2.ServoingModeInformation()
             base_servo_mode.servoing_mode = Base_pb2.SINGLE_LEVEL_SERVOING
             self.base.SetServoingMode(base_servo_mode)
 
+            # Initial feedback
             jointData = self.baseCyclic.RefreshFeedback().actuators
             self.currentJointAngles = np.array([np.deg2rad(jointData[i].position) for i in range(len(jointData))])
             self.currentGripperPosition = self.baseCyclic.RefreshFeedback().interconnect.gripper_feedback.motor[0].position
@@ -115,6 +123,7 @@ class ExecuteRobotAction:
         except Exception as e:
             self.isConnected = False
             print(f"ERROR in ExecuteRobotAction.connect_to_robot(): {e}")
+            raise e  # Re-raise so LeRobot knows connection failed
     
     def get_current_state(self):
         self.jointData = self.baseCyclic.RefreshFeedback().actuators
@@ -125,7 +134,7 @@ class ExecuteRobotAction:
     
     def disconnect_from_robot(self):
         try:
-            disconnect = self.connection.__exit__()
+            disconnect = self.connection.__exit__(None, None, None)
             print(f"Disconnected from robot. {disconnect}")
         except Exception as e:
             print(f"Error disconnecting: {e}")
@@ -211,6 +220,21 @@ class ExecuteRobotAction:
         # SendGripperCommand is high-level and safe to mix with Twist
         self.base.SendGripperCommand(gripper_command)
     
+    def move_gripper_velocity(self, speed):
+        """
+        Sends Gripper Speed Command.
+        speed: Positive to close, Negative to open.
+        """
+        gripper_command = Base_pb2.GripperCommand()
+        gripper_command.mode = Base_pb2.GRIPPER_SPEED
+        
+        finger = gripper_command.gripper.finger.add()
+        finger.finger_identifier = 1
+        finger.value = speed
+
+        self.base.SendGripperCommand(gripper_command)
+    
+    
     def act(self, action):
         """
         Original slow action method.
@@ -265,12 +289,30 @@ class ExecuteRobotAction:
         self.base.SendTwistCommand(command)
 
         # --- 2. Gripper Command ---
-        # We only send updates if the value changed to avoid spamming the bus,
-        # but since SendGripperCommand is high-level, it handles its own smoothing internally.
+
         current_val = action[6]
-        if abs(current_val - self.last_gripper_val) > 0.005:
-            self.move_vel_gripper(current_val)
-            self.last_gripper_val = current_val
+        cmd_vel = current_val/dt
+        MAX_GRIP_SPEED = 0.4
+
+        cmd_vel = max(min(cmd_vel, MAX_GRIP_SPEED), -MAX_GRIP_SPEED)
+        if abs(cmd_vel) > 0.01 or abs(self.last_gripper_val) > 0.01:
+            self.move_gripper_velocity(cmd_vel)
+            self.last_gripper_val = cmd_vel
+
+        
+        # SAVING ROBOT STATE
+        poseData = self.base.GetMeasuredCartesianPose()
+        jointData = self.baseCyclic.RefreshFeedback().actuators
+        self.currentJointAngles = np.array([np.deg2rad(jointData[i].position) for i in range(len(jointData))])
+        # Update pose vector (length matches self.n_joints)
+        if len(self.currentPose) >= 6:
+            self.currentPose[0] = poseData.x
+            self.currentPose[1] = poseData.y
+            self.currentPose[2] = poseData.z
+            self.currentPose[3] = poseData.theta_x
+            self.currentPose[4] = poseData.theta_y
+            self.currentPose[5] = poseData.theta_z
+        self.currentGripperPosition = self.baseCyclic.RefreshFeedback().interconnect.gripper_feedback.motor[0].position
         
         return True
 
