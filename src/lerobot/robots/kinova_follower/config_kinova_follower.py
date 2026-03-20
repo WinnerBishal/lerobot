@@ -1,37 +1,20 @@
 from dataclasses import dataclass, field
-from typing import Dict, List
+from typing import Dict
 from pathlib import Path
 
-from ..config import RobotConfig
-from ...cameras.camera import CameraConfig
+from lerobot.robots.config import RobotConfig
+from lerobot.cameras.camera import CameraConfig
 
 @RobotConfig.register_subclass("kinova_follower")
 @dataclass
 class KinovaFollowerConfig(RobotConfig):
-
-    # Custom Driver prameters for Kinova Gen3 API
+    # Custom Driver parameters
     ip: str = "192.168.1.10"
     username: str = "admin"
     password: str = "admin"
 
     cameras: Dict[str, CameraConfig] = field(default_factory=dict)
-
-    # Features Definitions
-    features: Dict[str, Dict] = field(
-        default_factory=lambda:{
-            "observation.state": {
-                "dtype": "float32",
-                # 7 joints + gripper
-                "shape": [8],
-                "names": ["j1", "j2", "j3", "j4", "j5", "j6", "j7", "gripper_pos"],
-            },
-            # Since we are using xbox controller, we define actions as velocities on cartesian space
-            "action": {
-                "dtype": "float32",
-                # twist (6) + gripper velocity
-                "shape": [7],
-                "names": ["vx", "vy", "vz", "wx", "wy", "wz", "gripper_vel"],
-            }
-        }
-    )
+    
+    # REMOVED: features dict. (Defined dynamically in the class to support aggregation)
+    
     calibration_dir: Path = Path(".cache/calibration/kinova_follower")
