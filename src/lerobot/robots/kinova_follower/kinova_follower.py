@@ -1,35 +1,25 @@
 import torch
 import numpy as np
-from functools import cached_property
 from typing import Any
-import copy
 
 from lerobot.robots.robot import Robot
 from lerobot.cameras.utils import make_cameras_from_configs
 from .config_kinova_follower import KinovaFollowerConfig
-from .kinova_utilities import ExecuteRobotAction
+from .kinova_utilities_v0 import ExecuteRobotAction
 
 class KinovaFollower(Robot):
     config_class = KinovaFollowerConfig
     name = "kinova_follower"
 
     def __init__(self, config: KinovaFollowerConfig):
+        self.cameras = make_cameras_from_configs(config.cameras)
         super().__init__(config)
         self.config = config
-        
         self.arm = ExecuteRobotAction()
-        
-        # 1. Initialize Cameras
-        self.cameras = make_cameras_from_configs(config.cameras)
-        
-        # 2. Sync Config Features
-        # Ensure config matches the Tuple format required for video recording.
-        # This allows LeRobot to detect these as 'video' features.
-        if "observation.images" not in self.config.features:
-             for name, camera in self.cameras.items():
-                self.config.features[f"observation.images.{name}"] = (camera.height, camera.width, 3)
-        
         self._connected = False
+
+        self.last_action_np = None
+        self.smoothing_alpha = 0.3
 
     @property
     def is_connected(self) -> bool:
@@ -39,153 +29,139 @@ class KinovaFollower(Robot):
     def is_calibrated(self) -> bool:
         return True 
 
-    @cached_property
+    @property
     def observation_features(self) -> dict:
-        """
-        Defines the structure of the observation dictionary.
-        """
-        # 1. Flatten state features
-        state_names = self.config.features["observation.state"]["names"]
-        features = {name: float for name in state_names}
-        
-        # 2. Define images as TUPLES (H, W, C) for video recording
-        # This format signals to LeRobot that these are video streams.
-        for name, camera in self.cameras.items():
-            features[f"observation.images.{name}"] = (camera.height, camera.width, 3)
+        features = {}
+        # 1. Define Atomic State Features (8 Total)
+        # Explicit definition ensures names like 'j1', 'gripper_pos' are saved in info.json
+        state_names = ["j1", "j2", "j3", "j4", "j5", "j6", "j7", "gripper_pos"]
+        for name in state_names:
+            features[name] = float
             
+        # 2. Define Cameras
+        for name, camera in self.cameras.items():
+            features[name] = (camera.height, camera.width, 3)
         return features
 
-    @cached_property
+    # @property
+    # def action_features(self) -> dict:
+    #     features = {}
+    #     # 1. Define Atomic Action Features (7 Total)
+    #     action_names = ["vx", "vy", "vz", "wx", "wy", "wz", "gripper_vel"]
+    #     for name in action_names:
+    #         features[name] = float
+    #     return features
+    
+    # Uncomment below to use policy trained on joint actions
+    @property
     def action_features(self) -> dict:
-        """
-        Defines the structure of the action dictionary.
-        We return a single vector shape to match the Xbox controller output.
-        """
-        return {
-            "action": {
-                "dtype": "float32",
-                "shape": (7,),
-            }
-        }
-
+        features = {}
+        # 1. Define Atomic Action Features (7 Total)
+        action_names = ["j1", "j2", "j3", "j4", "j5", "j6", "j7", "gripper_val"]  
+        for name in action_names:
+            features[name] = float
+        return features
+    
     def connect(self, calibrate: bool = True):
-        if self.is_connected:
-            return
-
+        if self.is_connected: return
         print(f"Connecting to Kinova at {self.config.ip}...")
-        self.arm.connect_to_robot(
-            ip=self.config.ip,
-            username=self.config.username,
-            password=self.config.password
-        )
-        
+        self.arm.connect_to_robot(ip=self.config.ip, username=self.config.username, password=self.config.password)
         for name, camera in self.cameras.items():
             print(f"Connecting to camera: {name}")
             camera.connect()
-        
         self._connected = True
-        
-        if calibrate:
-            self.calibrate()
-            
+        if calibrate: self.calibrate()
         print("Kinova System Connected.")
 
     def capture_images(self) -> dict[str, Any]:
-        """
-        Reads frames from all connected cameras.
-        """
         images = {}
         for name, camera in self.cameras.items():
-            img = camera.async_read()
-            
-            # Safe conversion to uint8 to prevent dark videos
-            # This handles cases where drivers might return float [0,1]
-            if img is not None:
-                if isinstance(img, torch.Tensor):
-                    img = img.cpu().numpy()
-                
-                if isinstance(img, np.ndarray):
-                    if np.issubdtype(img.dtype, np.floating):
-                        # Scale float [0, 1] to [0, 255] if needed
-                        if img.max() <= 1.0:
-                            img = (img * 255).astype(np.uint8)
-                        else:
-                            img = img.astype(np.uint8)
-                    elif img.dtype != np.uint8:
-                        img = img.astype(np.uint8)
-            
-            # FIX: Return ONLY the short key (e.g., 'wrist_image').
-            # The dataset recorder automatically maps 'wrist_image' -> 'observation.images.wrist_image'.
-            # Rerun will now see only this one active window per camera.
-            images[name] = img
-            
+            images[name] = camera.async_read()
         return images
 
-    def calibrate(self):
-        pass
-
-    def configure(self):
-        pass
+    def calibrate(self): pass
+    def configure(self): pass
 
     def get_observation(self) -> dict[str, Any]:
-        if not self.is_connected:
-            raise ConnectionError("Kinova is not connected.")
-
-        # 1. Get Robot State
+        if not self.is_connected: raise ConnectionError("Kinova is not connected.")
+        
+        # Fetch data
         current_joints = self.arm.currentJointAngles
         current_gripper = self.arm.currentGripperPosition
+        
+        # Combine into list (8 values)
         all_values = list(current_joints) + [current_gripper]
         
-        # 2. Map values to flattened keys
-        state_names = self.config.features["observation.state"]["names"]
+        # Map to Atomic Keys
+        state_names = ["j1", "j2", "j3", "j4", "j5", "j6", "j7", "gripper_pos"]
         observation = {name: val for name, val in zip(state_names, all_values)}
-
-        # 3. Add images
+        
         if self.cameras:
-            images = self.capture_images() 
-            observation.update(images)
-
+            observation.update(self.capture_images())
         return observation
 
-    def send_action(self, action: dict[str, Any]) -> dict[str, Any]:
-        if not self.is_connected:
-            raise ConnectionError("Kinova is not connected.")
+    # def send_action(self, action: dict[str, Any]) -> dict[str, Any]:
+    #     if not self.is_connected: raise ConnectionError("Kinova is not connected.")
         
-        action_obj = action
-        if isinstance(action, dict):
-            if "action" in action:
-                action_obj = action["action"]
-            else:
-                action_obj = next(iter(action.values()))
+    #     # Extract values efficiently
+    #     target_names = ["vx", "vy", "vz", "wx", "wy", "wz", "gripper_vel"]
+        
+    #     # Handle dictionary input
+    #     if all(k in action for k in target_names):
+    #         vals = [action[k] for k in target_names]
+    #     elif "action" in action:
+    #         # Handle vector input (from policy)
+    #         vals = action["action"]
+    #         if hasattr(vals, "tolist"): vals = vals.tolist()
+    #     else:
+    #         # Fallback
+    #         vals = list(action.values())
 
-        try:
-            import torch
-            if hasattr(torch, "is_tensor") and torch.is_tensor(action_obj):
-                action_np = action_obj.detach().cpu().numpy()
-            elif isinstance(action_obj, (list, tuple)):
-                action_np = np.asarray(action_obj, dtype=float)
-            elif isinstance(action_obj, np.ndarray):
-                action_np = action_obj
-            else:
-                action_np = np.asarray(action_obj)
-        except Exception:
-            action_np = np.asarray(action_obj)
+    #     # OPTIMIZATION: Convert directly to Python list of floats.
+    #     # This removes the PyTorch overhead that caused the lag.
+    #     if hasattr(vals, "detach"): vals = vals.detach().cpu()
+    #     vals_np = np.array(vals, dtype=np.float32).flatten()
+    #     vals_list = vals_np.tolist()
 
-        self.arm.act_twist(action_np)
-        return {"action": action_obj}
+    #     # Send to driver
+    #     self.arm.act_twist(vals_list)
+    #     return action
+    
+    def send_action(self, action: dict[str, Any]) -> dict[str, Any]:
+        if not self.is_connected: raise ConnectionError("Kinova is not connected.")
+        
+        # Target names now match Joint Mode
+        target_names = ["j1", "j2", "j3", "j4", "j5", "j6", "j7", "gripper_pos"]
+        
+        if all(k in action for k in target_names):
+            vals = [action[k] for k in target_names]
+        elif "action" in action:
+            vals = action["action"]
+            if hasattr(vals, "tolist"): vals = vals.tolist()
+        else:
+            vals = list(action.values())
+
+        if hasattr(vals, "detach"): vals = vals.detach().cpu()
+        current_action_np = np.array(vals, dtype=np.float32).flatten()
+
+        # 2. APPLY SMOOTHING (EMA)
+        if self.last_action_np is None:
+            smoothed_action = current_action_np
+        else:
+            # Formula: Smoothed = (Alpha * New) + ((1-Alpha) * Old)
+            # Alpha 0.3 means we only accept 30% of the new command per frame
+            smoothed_action = (self.smoothing_alpha * current_action_np) + \
+                              ((1 - self.smoothing_alpha) * self.last_action_np)
+        
+        self.last_action_np = smoothed_action
+        
+        # 3. Send to Robot
+        self.arm.act_joints(smoothed_action.tolist())
+        
+        return action
 
     def disconnect(self):
-        print("Disconnecting Kinova System...")
-        
-        for name, camera in self.cameras.items():
-            try:
-                camera.disconnect()
-            except Exception as e:
-                print(f"Error disconnecting camera {name}: {e}")
-
-        try:
-            if hasattr(self.arm, "disconnect_from_robot"):
-                self.arm.disconnect_from_robot()
-        except Exception:
-            pass
+        for c in self.cameras.values(): c.disconnect()
+        if hasattr(self.arm, "disconnect_from_robot"):
+            self.arm.disconnect_from_robot()
         self._connected = False
