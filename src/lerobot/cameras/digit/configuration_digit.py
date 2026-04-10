@@ -15,8 +15,8 @@ class DigitCameraConfig(CameraConfig):
     """
     serial_number: str = "D21357"
     fps: int = 30
-    width: int = 640
-    height: int = 480
-    resolution: str = "VGA"
+    width: int = 240
+    height: int = 320
+    resolution: str = "QVGA"
     intensity: int = 15
     color_mode: ColorMode = ColorMode.RGB
