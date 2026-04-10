@@ -18,3 +18,5 @@ class KinovaFollowerConfig(RobotConfig):
     # REMOVED: features dict. (Defined dynamically in the class to support aggregation)
     
     calibration_dir: Path = Path(".cache/calibration/kinova_follower")
+
+    smoothing_alpha: float = 0.6          # 0.3 to 1.0 for practial cmoothing. 1.0 is no smoothing
