@@ -53,14 +53,31 @@ class NetworkCamera(Camera):
         frame = self.backend.read()
 
         if frame is None:
-            # Return safe black frame if drop occurs
             return np.zeros(
                 (self.height, self.width, self.config.channels), 
                 dtype=self.config.numpy_dtype
             )
 
-        # Handle Color Conversion (assuming stream is RGB)
-        if self.config.channels == 3 and color_mode == ColorMode.BGR:
+        # --- FIX: Handle Depth Map Normalization and Colorization ---
+        if self.config.mode == "depth":
+            # 1. Ensure it's a 2D array for processing
+            if frame.ndim == 3:
+                frame = frame[:, :, 0]
+                
+            # 2. Normalize raw depth (e.g., 0-10000mm) to 0-255 uint8
+            # We use a 4000mm (4 meter) cutoff for better visual contrast
+            frame_norm = np.clip(frame, 0, 4000) / 4000.0 * 255
+            frame_uint8 = frame_norm.astype(np.uint8)
+            
+            # 3. Apply a colormap (Jet) to create a 3-channel RGB image
+            # This fixes both the "float range" error and the "1 vs 3 channels" requirement
+            frame = cv2.applyColorMap(frame_uint8, cv2.COLORMAP_JET)
+            
+            # 4. Optional: Convert to RGB (OpenCV defaults to BGR)
+            frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+
+        # Handle Color Conversion for standard RGB streams
+        elif self.config.channels == 3 and color_mode == ColorMode.BGR:
             frame = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
         
         return frame
