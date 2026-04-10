@@ -5,7 +5,7 @@ from typing import Any
 from lerobot.robots.robot import Robot
 from lerobot.cameras.utils import make_cameras_from_configs
 from .config_kinova_follower import KinovaFollowerConfig
-from .kinova_utilities_v0 import ExecuteRobotAction
+from .kinova_utilities import ExecuteRobotAction
 
 class KinovaFollower(Robot):
     config_class = KinovaFollowerConfig
@@ -144,19 +144,15 @@ class KinovaFollower(Robot):
         if hasattr(vals, "detach"): vals = vals.detach().cpu()
         current_action_np = np.array(vals, dtype=np.float32).flatten()
 
-        # 2. APPLY SMOOTHING (EMA)
-        if self.last_action_np is None:
-            smoothed_action = current_action_np
-        else:
-            # Formula: Smoothed = (Alpha * New) + ((1-Alpha) * Old)
-            # Alpha 0.3 means we only accept 30% of the new command per frame
-            smoothed_action = (self.smoothing_alpha * current_action_np) + \
-                              ((1 - self.smoothing_alpha) * self.last_action_np)
+        # Apply EMA smoothing only when alpha < 1.0 (default 1.0 = no smoothing)
+        if self.smoothing_alpha < 1.0 and self.last_action_np is not None:
+            current_action_np = (self.smoothing_alpha * current_action_np) + \
+                                ((1 - self.smoothing_alpha) * self.last_action_np)
         
-        self.last_action_np = smoothed_action
+        self.last_action_np = current_action_np
         
         # 3. Send to Robot
-        self.arm.act_joints(smoothed_action.tolist())
+        self.arm.act_joints(current_action_np.tolist())
         
         return action
 
